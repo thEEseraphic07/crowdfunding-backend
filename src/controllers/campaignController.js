@@ -1,10 +1,18 @@
 const Campaign = require('../models/campaignModel');
+const User = require('../models/userModel');
+const createNotification =  require("../utils/createNotification");
+const Donation = require ("../models/donationModel");
+
 exports.createCampaign = async (req, res) => {
   try {
     const { title, description, targetAmount, deadline, category, image } = req.body;
 
     if (!title || !description || !targetAmount || !deadline || !category) {
       return res.status(400).json({ message: 'Please provide all required fields' });
+    }
+
+    if(new Date(deadline) <= new Date()){
+      return res.status(400).json({ message: 'Deadline must be in the future' });
     }
 
     if (!req.user) {
@@ -19,7 +27,28 @@ exports.createCampaign = async (req, res) => {
       category,
       image,
       owner: req.user._id,
+      isApproved: true,
+      isActive: true,
+      isFlagged: false,
+      status: "active"
     });
+
+    const io = req.app.get('io');
+    
+    io.to("admins").emit("newCampaign", campaign);
+
+    if(io){
+      io.emit('newCampaign', {
+        _id: campaign._id,
+        title: campaign.title,
+        description: campaign.description,
+        targetAmount: campaign.targetAmount,
+        currentAmount: campaign.currentAmount || 0,
+        deadline: campaign.deadline,
+        category: campaign.category,
+        image: campaign.image,
+      })
+    }
 
     res.status(201).json(campaign);
   } catch (error) {
@@ -28,53 +57,75 @@ exports.createCampaign = async (req, res) => {
   }
 };
 
-exports.getCampaigns = async (req, res)=>{
+exports.getSingleCampaign = async (req, res) =>{
   try{
-    const { category, isActive, minAmount, maxAmount, search } = req.query;
-    let filter = {};
+    const campaign = await Campaign.findById(req.params.id)
+    .populate("owner", "name bio profileImage");
 
-    if(category){
-      filter.category = category;
+    if(!campaign){
+      return res.status(404).json({
+        message: "Campaign not found"
+      });
     }
-    if(isActive !== undefined){
-      filter.isActive = isActive === 'true';
-    }
-    if(minAmount || maxAmount){
-      filter.targetAmount = {};
-      if(minAmount) filter.targetAmount.$gte = Number(minAmount);
-      if(maxAmount) filter.targetAmount.$lte = Number(maxAmount);
-    }
-
-    if(search){
-      filter.$or = [
-        {title: { $regex: search, $options: 'i'} },
-        {description: { $regex: search, $options: 'i'} }
-      ]
-    }
-
-    const campaigns = await Campaign
-    .find(filter)
-    .populate('owner', 'name email')
-    .sort({createdAt: -1})
-
-    res.json(campaigns);
-  }catch(error){
-    res.status(500).json({message: error.message});
+    res.json(campaign);
+  }catch(err){
+    console.error("Get campaign error:", err);
+    res.status(500).json({
+      message: "Server error"
+    });
   }
 };
 
-// exports.getCampaigns = async (req, res) => {
-//   try {
-//     const campaigns = await Campaign.find({ isActive: true }).populate('owner', 'name email');
-//     res.json(campaigns);
-//   } catch (error) {
-//     res.status(500).json({ message: error.message });
-//   }
-// };
+exports.getCampaigns = async (req, res) => {
+  try {
+    const { category, minAmount, maxAmount, search } = req.query;
+
+    let filter = {
+      isApproved: true,
+      isActive: true,
+      isFlagged: false,
+      status: "active",
+      deadline: { $gt: new Date() }
+    };
+
+    if (category) {
+      filter.category = category;
+    }
+
+    if (minAmount || maxAmount) {
+      filter.targetAmount = {};
+
+      if (minAmount) {
+        filter.targetAmount.$gte = Number(minAmount);
+      }
+
+      if (maxAmount) {
+        filter.targetAmount.$lte = Number(maxAmount);
+      }
+    }
+
+    if (search) {
+      filter.$or = [
+        { title: { $regex: search, $options: "i" } },
+        { description: { $regex: search, $options: "i" } }
+      ];
+    }
+
+    const campaigns = await Campaign
+      .find(filter)
+      .populate("owner", "name email")
+      .sort({ createdAt: -1 });
+
+    res.json(campaigns);
+
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
 
 exports.getCampaignById = async (req, res) => {
   try {
-    const campaign = await Campaign.findById(req.params.id).populate('owner', 'name email');
+    const campaign = await Campaign.findById(req.params.id).populate('owner', 'name email bio profileImage');
     if (!campaign) {
       return res.status(404).json({ message: 'Campaign not found' });
     }
@@ -111,60 +162,6 @@ exports.updateCampaign = async (req, res)=>{
     }
 }
 
-exports.deleteCampaign = async (req, res)=>{
-    try{
-        const campaign = await Campaign.findById(req.params.id);
-        if (!campaign) return res.status(403).json({message: "Campaign not found"});
-
-        if(campaign.owner.toString() !==req.user._id.toString()){
-            return res.status(401).json({message: "Not authorized to delete this campaign"});
-        }
-        await campaign.remove;
-        res.json({message: "Campaign deleted successfully"})
-    }catch (error){
-        console.error(error.stack);
-        res.status(500).json({message: error.message})
-    }
-}
-
-exports.donateToCampaign = async (req, res) => {
-  try {
-    if (!req.user) {
-      return res.status(401).json({ message: 'Not authorized' });
-    }
-
-    const { amount } = req.body;
-
-    if (!amount || amount <= 0) {
-      return res.status(400).json({ message: 'Please provide a valid donation amount' });
-    }
-
-    const campaign = await Campaign.findById(req.params.id);
-
-    if (!campaign) {
-      return res.status(404).json({ message: 'Campaign not found' });
-    }
-
-    campaign.donations.push({
-      user: req.user._id,
-      amount: Number(amount),
-    });
-
-    campaign.currentAmount += Number(amount);
-
-    await campaign.save();
-
-    res.json({
-      message: 'Donation successful',
-      currentAmount: campaign.currentAmount,
-    });
-
-  } catch (error) {
-    console.error('Donation error:', error);
-    res.status(500).json({ message: error.message });
-  }
-};
-
 exports.getFilteredCampaigns = async (req, res) => {
   try {
     const { category, isActive, minAmount, maxAmount } = req.query;
@@ -183,6 +180,19 @@ exports.getFilteredCampaigns = async (req, res) => {
     return res.status(500).json({ message: error.message });
   }
 };
+
+exports.getMyCampaigns = async (req, res) => {
+  try{
+    const campaigns = await Campaign.find({
+      owner: req.user._id
+    })
+    .sort({ createdAt: -1});
+
+    res.json(campaigns);
+  }catch(error){
+    res.status(500).json({message: error.message});
+  }
+}
 
 exports.searchCampaigns = async (req, res)=>{
   try{
@@ -219,6 +229,151 @@ exports.searchCampaigns = async (req, res)=>{
     });
   }catch (error){
     console.error("Error in searchCampaigns:", error);
-    return res.status(500).json({messag: error.message});
+    return res.status(500).json({message: error.message});
+  
   }
 }
+
+exports.endCampaign = async (req, res) => {
+  try {
+    if (!req.user.isAdmin) {
+      return res.status(403).json({ message: "Admin only" });
+    }
+
+    const campaign = await Campaign.findById(req.params.id);
+    console.log("CAMPAIGN FOUND:", campaign);
+    console.log("OWNER FIELD:", campaign.owner);
+    if (!campaign) {
+      return res.status(404).json({ message: "Campaign not found" });
+    }
+
+    await Campaign.findByIdAndUpdate(req.params.id, {
+      status: "ended"
+    });
+
+    const io = req.app.get("io");
+
+    await createNotification({
+      io,
+      user: campaign.owner,
+      title: "Campaign Ended",
+      type: "campaign_ended",
+      message: `Your campaign "${campaign.title}" was ended by admin`
+    });
+
+    await createNotification({
+     io,
+     audience: "admin",
+     title: "Campaign Ended",
+     message: `Campaign "${campaign.title}" was ended`,
+     type: "admin_action"
+    });
+
+    const donations = await Donation.find({ campaign: campaign._id });
+
+    const donorIds = [...new Set(donations.map(d => d.user.toString()))];
+
+    for (let userId of donorIds) {
+      await createNotification({
+        io,
+        user: userId,
+        audience: "user",
+        type: "campaign_ended",
+        message: `A campaign you donated to ("${campaign.title}") has ended`
+      });
+    }
+
+    io.to("admins").emit("notification", {
+      message: `Campaign "${campaign.title}" ended`,
+      type: "admin_action",
+      time: new Date()
+    });
+
+    io.emit("campaignUpdated", {
+      campaignId: campaign._id,
+      status: "ended"
+    });
+
+    res.json({ message: "Campaign ended successfully" });
+
+  } catch (err) {
+    console.error("END CAMPAIGN ERROR:", err);
+    res.status(500).json({ message: err.message });
+  }
+};
+
+exports.flagCampaign = async (req, res) => {
+  try {
+    if (!req.user.isAdmin) {
+      return res.status(403).json({ message: "Admin only" });
+    }
+
+    const updated = await Campaign.findByIdAndUpdate(
+      req.params.id,
+      { isFlagged: true, status: "flagged" },
+      { new: true }
+    );
+
+    if (!updated) {
+      return res.status(404).json({ message: "Campaign not found" });
+    }
+
+    req.app.get("io").emit("campaignFlagged", {
+      campaignId: updated._id
+    });
+
+    res.json({ message: "Campaign flagged successfully" });
+
+  } catch (err) {
+    console.error("FLAG ERROR:", err);
+    res.status(500).json({ message: err.message });
+  }
+};
+
+exports.unflagCampaign = async (req, res) => {
+  try {
+    if (!req.user.isAdmin) {
+      return res.status(403).json({ message: "Admin only" });
+    }
+
+    const updated = await Campaign.findByIdAndUpdate(
+      req.params.id,
+      { isFlagged: false, status: "active" },
+      { new: true }
+    );
+
+    if (!updated) {
+      return res.status(404).json({ message: "Campaign not found" });
+    }
+
+    req.app.get("io").emit("campaignUnflagged", {
+      campaignId: updated._id
+    });
+
+    res.json({ message: "Campaign unflagged successfully" });
+
+  } catch (err) {
+    console.error("UNFLAG ERROR:", err);
+    res.status(500).json({ message: err.message });
+  }
+};
+
+exports.getTrendingCampaigns = async (req, res) => {
+  try {
+    const campaigns = await Campaign.find({
+      isApproved: true,
+      isActive: true,
+      isFlagged: false,
+      status: "active",
+      deadline: {$gt: new Date()}
+    })
+      .populate("owner", "name")
+      .sort({ currentAmount: -1 })
+      .limit(10);
+
+    return res.json(campaigns);
+  } catch (err) {
+    console.error("Trending error:", err);
+    return res.status(500).json({ message: err.message });
+  }
+};

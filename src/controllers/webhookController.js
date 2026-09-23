@@ -1,48 +1,52 @@
-const crypto = require ('crypto');
-const Donation = require ('../models/donationModel');
-const Campaign = require ('../models/campaignModel');
+const crypto = require("crypto");
+const { completeDonation } = require("./paymentController")
 
+exports.paystackWebhook = async (req, res) => {
+  try {
+    const secret = process.env.PAYSTACK_SECRET_KEY;
 
-exports.paystackWebhook = async (req, res)=>{
-    console.log('PAYSTACK WEBHOOK HIT');
-    console.log(req.body);
-    res.sendStatus(200)
-    try{
-        const secret = process.env.PAYSTACK_SECRET_KEY;
-        const hash = crypto
-        .createHmac('sha512', secret)
-        .update(req.body)
-        .digest('hex');
+    const hash = crypto
+      .createHmac("sha512", secret)
+      .update(req.body)
+      .digest("hex");
 
-        if (hash !== req.headers['x-paystack-signature']){
-            return res.sendStatus(401).send('Invalid signature')
-        }
-
-        const event = JSON.parse(req.body.toString());
-        console.log('PAYSTACK EVENT:', event.event)
-        console.log('DATA:', event.data);
-
-        if(event.event === 'charge.success'){
-            const data = event.data;
-            const reference = data.reference;
-
-            const donation = await Donation.findOne({reference});
-
-            if(!donation || donation.status === 'success'){
-                return res.sendStatus(200)
-            }
-
-            donation.status = 'success';
-            donation.paidAt = new Date();
-            await donation.save();
-
-           await Campaign.findByIdAndUpdate(donation.campaign, {
-              $inc: { raisedAmount: donation.amount },
-           });
-        }
-        res.sendStatus(200);
-    }catch(error){
-        console.error('Webhook error:', error.message)
-        res.sendStatus(500)
+    if (hash !== req.headers["x-paystack-signature"]) {
+      return res.status(401).send("Invalid signature");
     }
-}
+
+    const event = JSON.parse(req.body.toString());
+
+    console.log("PAYSTACK EVENT:", event.event);
+
+    if (event.event !== "charge.success") {
+      return res.sendStatus(200);
+    }
+
+    const data = event.data;
+
+    const result = await completeDonation({
+      reference: data.reference,
+      paystackData: data,
+      io: req.app.get("io")
+    });
+
+    if (!result.success) {
+      console.error(
+        "Donation completion failed:",
+        result.message
+      );
+
+      return res.sendStatus(200);
+    }
+
+    return res.sendStatus(200);
+
+  } catch (error) {
+    console.error(
+      "Webhook error:",
+      error.message
+    );
+
+    return res.sendStatus(500);
+  }
+};

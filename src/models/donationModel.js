@@ -26,6 +26,11 @@ const donationSchema = new mongoose.Schema(
       enum: ['pending', 'success', 'failed'],
       default: 'pending',
     },
+    paymentMethod: {
+      type: String,
+      enum: ["card", "bank"],
+      default: "card"
+    },
   },
   { timestamps: true }
 );
