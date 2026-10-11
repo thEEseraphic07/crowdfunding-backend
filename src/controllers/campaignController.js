@@ -1,44 +1,88 @@
 const Campaign = require('../models/campaignModel');
 const User = require('../models/userModel');
+const Settings = require ("../models/settingsModel");
 const createNotification =  require("../utils/createNotification");
 const Donation = require ("../models/donationModel");
 
+
 exports.createCampaign = async (req, res) => {
   try {
-    const { title, description, targetAmount, deadline, category, image } = req.body;
+    const {
+      title,
+      description,
+      targetAmount,
+      deadline,
+      category,
+      image
+    } = req.body;
 
     if (!title || !description || !targetAmount || !deadline || !category) {
-      return res.status(400).json({ message: 'Please provide all required fields' });
+      return res.status(400).json({
+        message: "Please provide all required fields"
+      });
     }
 
-    if(new Date(deadline) <= new Date()){
-      return res.status(400).json({ message: 'Deadline must be in the future' });
+    if (new Date(deadline) <= new Date()) {
+      return res.status(400).json({
+        message: "Deadline must be in the future"
+      });
     }
 
     if (!req.user) {
-      return res.status(401).json({ message: 'Not authorized' });
+      return res.status(401).json({
+        message: "Not authorized"
+      });
     }
+
+    const settings = await Settings.findOne();
+
+const allowedCategories = settings?.campaignCategories || [];
+
+const selectedCategory = allowedCategories.find(
+  cat => cat.toLowerCase() === category.trim().toLowerCase()
+);
+
+console.log("Selected category:", JSON.stringify(category));
+console.log("Allowed categories:", allowedCategories);
+
+if (!selectedCategory) {
+  return res.status(400).json({
+    message: "Please select a valid campaign category."
+  });
+}
+
+    const autoApprove = settings?.autoApproveCampaigns === true;
 
     const campaign = await Campaign.create({
       title,
       description,
       targetAmount,
       deadline,
-      category,
+      category: selectedCategory,
       image,
       owner: req.user._id,
-      isApproved: true,
-      isActive: true,
+      isApproved: autoApprove,
+      isActive: autoApprove,
       isFlagged: false,
-      status: "active"
+      status: autoApprove ? "active" : "pending"
     });
 
-    const io = req.app.get('io');
-    
-    io.to("admins").emit("newCampaign", campaign);
+    const io = req.app.get("io");
 
-    if(io){
-      io.emit('newCampaign', {
+    if (io) {
+      if (!autoApprove) {
+        io.to("admins").emit("newCampaign", campaign);
+      }
+
+      if (autoApprove) {
+        io.emit("campaignApproved", {
+          _id: campaign._id,
+          title: campaign.title,
+          status: campaign.status
+        });
+      }
+
+      io.emit("newCampaign", {
         _id: campaign._id,
         title: campaign.title,
         description: campaign.description,
@@ -47,15 +91,20 @@ exports.createCampaign = async (req, res) => {
         deadline: campaign.deadline,
         category: campaign.category,
         image: campaign.image,
-      })
+      });
     }
 
-    res.status(201).json(campaign);
+    return res.status(201).json(campaign);
+
   } catch (error) {
-    console.error('Error in createCampaign:', error.stack);
-    res.status(500).json({ message: error.message });
+    console.error("Error in createCampaign:", error.stack);
+
+    return res.status(500).json({
+      message: error.message
+    });
   }
 };
+
 
 exports.getSingleCampaign = async (req, res) =>{
   try{
@@ -151,7 +200,7 @@ exports.updateCampaign = async (req, res)=>{
         campaign.description = description || campaign.description;
         campaign.targetAmount = targetAmount || campaign.targetAmount;
         campaign.deadline = deadline || campaign.deadline;
-        campaign.category = category || campaign.category;
+        campaign.category = selectedCategory || campaign.category;
         campaign.image = image || campaign.image;
 
         const updatedCampaign = await campaign.save();

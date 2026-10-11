@@ -65,6 +65,18 @@ const transactionSchema = new mongoose.Schema({
     type: String
   },
 
+  accountName: {
+    type: String
+  },
+
+  recipientCode: {
+    type: String
+  },
+
+  transferReference: {
+    type: String
+  },
+
   reference: String
 
 }, {

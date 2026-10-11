@@ -8,6 +8,39 @@ const PlatformWallet =require("../models/platformWallet");
 const Settings = require("../models/settingsModel");
 const User = require("../models/userModel");
 
+const refundPaystackTransaction = async (reference) => {
+  try {
+    const response = await axios.post(
+      "https://api.paystack.co/refund",
+      {
+        transaction: reference
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}`,
+          "Content-Type": "application/json"
+        }
+      }
+    );
+
+    return {
+      success: true,
+      data: response.data
+    };
+
+  } catch (error) {
+    console.error(
+      "Paystack refund failed:",
+      error.response?.data || error.message
+    );
+
+    return {
+      success: false,
+      error
+    };
+  }
+};
+
 const completeDonation = async ({
   reference,
   paystackData,
@@ -85,8 +118,10 @@ const completeDonation = async ({
       };
     }
 
-    const settings = await Settings.findOne();
-    const feeRate = (settings?.platformFee || 5) / 100;
+    const settings = await Settings.findOne().session(session);
+    const feeRate = settings?.platformFee !== undefined
+    ? Number(settings.platformFee) / 100
+    : 0.05;
 
     const feeAmount = donation.amount * feeRate;
     const creatorAmount = donation.amount - feeAmount;
@@ -144,6 +179,18 @@ const completeDonation = async ({
 
     if (!updatedCampaign) {
       await session.abortTransaction();
+
+      const refund = await refundPaystackTransaction(reference);
+
+      if(!refund.success){
+        console.error("Donation could not be completed and Paystack refund failed:", reference);
+
+        return{
+          success: false,
+          status: 500,
+          message: "Payment was received but could not be applied to campaign. Please contact support."
+        };
+      }
 
       return {
         success: false,
@@ -268,6 +315,8 @@ exports.initializePayment = async (req, res) => {
       );
 
     if (!campaign) {
+      await session.abortTransaction();
+
       return res.status(404).json({
         message:
         "Campaign not found"
@@ -280,6 +329,8 @@ exports.initializePayment = async (req, res) => {
       campaign.isFlagged ||
       campaign.status !== "active"
     ){
+      await session.abortTransaction();
+
       return res.status(400).json({
         message:
         "Campaign is not active for donations"
@@ -287,9 +338,17 @@ exports.initializePayment = async (req, res) => {
     }
 
     if(campaign.deadline && new Date(campaign.deadline) <= new Date()){
+      await session.abortTransaction();
+
       return res.status(400).json({
         message: "This campaign has ended and is no longer accepting donations."
       })
+    }
+
+    const donationAmount = Number(amount);
+
+    if (!donationAmount || donationAmount <= 0) {
+      return res.status(400).json({ message: "Invalid donation amount" });
     }
 
     const remainingAmount = Number(campaign.targetAmount) - Number(campaign.currentAmount);
@@ -326,7 +385,7 @@ exports.initializePayment = async (req, res) => {
 
           reference,
 
-          callback_url: `${process.env.CLIENT_URL}/pages/payment-success.html`
+          callback_url: `${process.env.CLIENT_URL}/FRONTEND/pages/payment-success.html`
 
         },
 
@@ -446,4 +505,5 @@ exports.verifyPayment = async (req, res) => {
   }
 };
 
+exports.refundPaystackTransaction = refundPaystackTransaction;
 exports.completeDonation = completeDonation;

@@ -23,6 +23,10 @@ const platformWithdrawalSchema = new mongoose.Schema({
 
   reference: String,
 
+  recipientCode: {
+    type: String
+  },
+
   status: {
     type: String,
     enum: [
@@ -31,7 +35,7 @@ const platformWithdrawalSchema = new mongoose.Schema({
       "completed",
       "failed"
     ],
-    default: "pending"
+    default: "processing"
   },
 
   processedBy: {

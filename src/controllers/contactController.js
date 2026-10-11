@@ -1,7 +1,15 @@
 const Contact = require("../models/contactModel");
-const { Resend } = require("resend");
+const nodemailer = require("nodemailer");
 
-const resend = new Resend(process.env.RESEND_API_KEY);
+const transporter= nodemailer.createTransport({
+    host: process.env.SMTP_HOST,
+    port:Number(process.env.SMTP_PORT),
+    secure: false,
+    auth: {
+        user: process.env.SMTP_USER,
+        pass: process.env.SMTP_PASS
+    }
+});
 
 exports.sendContactMessage = async(req,res)=>{
 
@@ -33,9 +41,9 @@ exports.sendContactMessage = async(req,res)=>{
         
         console.log("Sending email to:", process.env.CONTACT_EMAIL);
 
-        const response = await resend.emails.send({
+        const response = await transporter.sendMail({
 
-            from:"CrowdFund <onboarding@resend.dev>",
+            from:`"CrowdFund" <${process.env.SMTP_USER}>`,
 
             to:process.env.CONTACT_EMAIL,
 
@@ -57,8 +65,8 @@ exports.sendContactMessage = async(req,res)=>{
         });
         console.log(response);
         try{
-        const userResponse = await resend.emails.send({
-            from: process.env.EMAILS_FROM,
+        const userResponse = await transporter.sendMail({
+            from: `"CrowdFund" <${process.env.SMTP_USER}>`,
 
             to: email,
 
@@ -215,9 +223,9 @@ exports.replyToContactMessage = async (req, res) => {
             });
         }
 
-        await resend.emails.send({
+        await transporter.sendMail({
 
-            from: process.env.EMAILS_FROM,
+            from: process.env.EMAIL_FROM,
 
             to: contact.email,
 
@@ -229,7 +237,7 @@ exports.replyToContactMessage = async (req, res) => {
                     <h2>Hello ${contact.name},</h2>
 
                     <p>${reply}</p>
-
+                    
                     <br>
 
                     <p>

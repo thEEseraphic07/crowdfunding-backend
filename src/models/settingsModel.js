@@ -47,6 +47,11 @@ const settingsSchema = new mongoose.Schema({
         default: false
     },
 
+    allowCategoryCreation: {
+        type: Boolean,
+        default: true
+    },
+
     maintenanceMode: {
         type: Boolean,
         default: false

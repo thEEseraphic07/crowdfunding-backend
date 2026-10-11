@@ -22,7 +22,9 @@ const maintenanceMiddleware = require("./middleware/maintenanceMiddleware");
 const app = express();
 connectDB();
 
-app.use(cors());
+app.use(cors({
+  origin: process.env.CLIENT_URL,
+}));
 
 app.use('/api/webhook', webhookRoutes);
 

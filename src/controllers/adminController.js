@@ -7,6 +7,7 @@ const createNotification = require("../utils/createNotification");
 const PlatformWallet = require("../models/platformWallet");
 const PlatformWithdrawal = require("../models/platformWithdrawalModel");
 const axios = require ("axios");
+const { createTransferRecipient, initiateTransfer} = require("./withdrawController")
 
 exports.getAdminStats = async (req, res) => {
   try {
@@ -435,12 +436,15 @@ exports.getPlatformWallet = async (req, res) => {
 
 exports.requestPlatformWithdrawal = async (req, res) => {
   let session;
+
   try {
     session = await mongoose.startSession();
     session.startTransaction();
+
     const {
       amount,
       bankName,
+      bankCode,
       accountNumber,
       accountName
     } = req.body;
@@ -450,15 +454,22 @@ exports.requestPlatformWithdrawal = async (req, res) => {
     if (
       !amount ||
       !bankName ||
+      !bankCode ||
       !accountNumber ||
       !accountName
     ) {
+      await session.abortTransaction();
+      session.endSession();
+
       return res.status(400).json({
         message: "All fields are required"
       });
     }
 
     if (!withdrawalAmount || withdrawalAmount <= 0) {
+      await session.abortTransaction();
+      session.endSession();
+
       return res.status(400).json({
         message: "Invalid withdrawal amount"
       });
@@ -467,46 +478,64 @@ exports.requestPlatformWithdrawal = async (req, res) => {
     let wallet = await PlatformWallet.findOne();
 
     if (!wallet) {
-     wallet = await PlatformWallet.create({
-      key: "main",
-      balance: 0,
-      transactions: []
-     });
+      wallet = await PlatformWallet.create({
+        key: "main",
+        balance: 0,
+        transactions: []
+      });
     }
 
     if (wallet.balance < withdrawalAmount) {
+      await session.abortTransaction();
+      session.endSession();
+
       return res.status(400).json({
         message: "Insufficient platform balance"
       });
     }
+
+    const recipient = await createTransferRecipient({
+      name: accountName,
+      accountNumber,
+      bankCode
+    });
+
+    const reference =
+      `pf-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+
+    const transfer = await initiateTransfer({
+      amount: withdrawalAmount,
+      recipientCode: recipient.recipient_code,
+      reference
+    });
 
     const withdrawal = await PlatformWithdrawal.create([{
       amount: withdrawalAmount,
       bankName,
       accountNumber,
       accountName,
+      recipientCode: recipient.recipient_code,
       processedBy: req.user._id,
-      reference:
-        "PF-" +
-        Date.now()
-    }], {session});
+      reference,
+      status: "processing"
+    }], { session });
 
-const createdWithdrawal = withdrawal[0];
+    const createdWithdrawal = withdrawal[0];
 
     const transaction = await Transaction.create([{
       user: req.user._id,
       amount: withdrawalAmount,
       type: "platform-withdrawal",
-      status: "completed",
-      reference: createdWithdrawal.reference
-    }], {session});
+      status: "pending",
+      reference
+    }], { session });
 
     const createdTransaction = transaction[0];
 
     wallet.balance -= withdrawalAmount;
     wallet.transactions.push(createdTransaction._id);
 
-    await wallet.save({session});
+    await wallet.save({ session });
 
     await session.commitTransaction();
     session.endSession();
@@ -516,21 +545,30 @@ const createdWithdrawal = withdrawal[0];
       user: req.user._id,
       audience: "user",
       title: "Platform Withdrawal",
-      message: `₦${withdrawalAmount.toLocaleString()} withdrawn successfully.`,
+      message:
+        `₦${withdrawalAmount.toLocaleString()} withdrawal is being processed.`,
       type: "withdrawal"
     });
 
     res.json({
-      message: "Withdrawal successful",
-      withdrawal: createdWithdrawal
+      message: "Withdrawal initiated successfully",
+      withdrawal: createdWithdrawal,
+      transfer
     });
 
   } catch (err) {
-    await session.abortTransaction();
-    session.endSession();
-    console.error(err);
+
+    if (session) {
+      try {
+        await session.abortTransaction();
+      } catch {}
+      session.endSession();
+    }
+
+    console.error("Platform withdrawal error:", err);
+
     res.status(500).json({
-      message: err.message
+      message: err.message || "Unable to process platform withdrawal"
     });
   }
 };
@@ -849,6 +887,55 @@ exports.getPlatformEarnings = async (req, res) => {
     console.error(err);
     res.status(500).json({
       message: err.message
+    });
+  }
+};
+
+exports.approveCampaign = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const campaign = await Campaign.findById(id);
+
+    if (!campaign) {
+      return res.status(404).json({
+        message: "Campaign not found"
+      });
+    }
+
+    if (campaign.isApproved) {
+      return res.status(400).json({
+        message: "Campaign is already approved"
+      });
+    }
+
+    campaign.isApproved = true;
+    campaign.isActive = true;
+    campaign.isFlagged = false;
+    campaign.status = "active";
+
+    await campaign.save();
+
+    const io = req.app.get("io");
+
+    if (io) {
+      io.emit("campaignApproved", {
+        _id: campaign._id,
+        title: campaign.title,
+        status: campaign.status
+      });
+    }
+
+    return res.json({
+      message: "Campaign approved successfully",
+      campaign
+    });
+
+  } catch (error) {
+    console.error("Error approving campaign:", error);
+
+    return res.status(500).json({
+      message: error.message || "Failed to approve campaign"
     });
   }
 };

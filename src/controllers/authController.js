@@ -106,7 +106,7 @@ exports.verifyEmail = async (req, res) => {
 
     await user.save();
 
-    res.redirect(`${process.env.CLIENT_URL}/pages/login.html`);
+    res.redirect(`${process.env.CLIENT_URL}/FRONTEND/pages/login.html`);
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -159,8 +159,7 @@ exports.loginUser = async (req, res) => {
     console.log("SETTINGS:", settings);
     console.log("2FA ENABLED:", settings?.enable2FA);
 
-    const require2FA = settings?.enable2FA === true &&
-    user?.twoFactorEnabled === true;
+    const require2FA = settings?.enable2FA === true;
 
     if (require2FA) {
       const otp = Math.floor(100000 + Math.random() * 900000);
@@ -222,41 +221,87 @@ exports.verify2FA = async (req, res) => {
   try {
     const { email, code, rememberMe } = req.body;
 
-    const user = await User.findOne({ email });
-
-    if (!user) {
-      return res.status(404).json({
-        message: "User not found"
+    if (!email || !code) {
+      return res.status(400).json({
+        message: "Email and OTP are required"
       });
     }
 
-    if (user.twoFactorCode != code) {
+    const settings = await Settings.findOne({});
+
+    if (settings?.enable2FA !== true) {
+      return res.status(403).json({
+        message: "Two-factor authentication is disabled"
+      });
+    }
+
+    const user = await User.findOne({ email });
+
+    if (!user) {
+      return res.status(401).json({
+        message: "Invalid verification request"
+      });
+    }
+
+    if (user.isSuspended) {
+      return res.status(403).json({
+        message: "Account suspended"
+      });
+    }
+
+    if (!user.isVerified) {
+      return res.status(403).json({
+        message: "Verify email first"
+      });
+    }
+
+    if (user.lockUntil && user.lockUntil > Date.now()) {
+      return res.status(403).json({
+        message: "Account locked"
+      });
+    }
+
+    if (
+      user.twoFactorCode == null ||
+      user.twoFactorExpires == null
+    ) {
+      return res.status(400).json({
+        message: "No active OTP. Please log in again."
+      });
+    }
+
+    if (
+      String(user.twoFactorCode) !== String(code).trim()
+    ) {
       return res.status(400).json({
         message: "Invalid OTP"
       });
     }
 
-    if (user.twoFactorExpires < Date.now()) {
+    if (new Date(user.twoFactorExpires).getTime() <= Date.now()) {
+      user.twoFactorCode = null;
+      user.twoFactorExpires = null;
+      await user.save();
+
       return res.status(400).json({
-        message: "OTP expired"
+        message: "OTP expired. Please log in again."
       });
     }
 
     user.twoFactorCode = null;
     user.twoFactorExpires = null;
 
-    const ip = req.ip;
-    const userAgent = req.headers["user-agent"];
-
+    user.failedLoginAttempts = 0;
+    user.lockUntil = null;
     user.lastLogin = new Date();
-    user.lastLoginIP = ip;
-    user.lastLoginUserAgent = userAgent;
+    user.lastLoginIP = req.ip;
+    user.lastLoginUserAgent = req.headers["user-agent"];
 
     await user.save();
 
-    await sendLoginAlert({ user, req });
-
     const token = generateToken(user._id, rememberMe);
+
+    await sendLoginAlert({ user, req });
 
     return res.json({
       token,
@@ -269,12 +314,14 @@ exports.verify2FA = async (req, res) => {
     });
 
   } catch (error) {
-    console.error(error);
-    res.status(500).json({
+    console.error("2FA verification error:", error);
+
+    return res.status(500).json({
       message: "Server error"
     });
   }
 };
+
 
 exports.resendOTP = async (req, res) => {
   try {
@@ -283,6 +330,13 @@ exports.resendOTP = async (req, res) => {
     if (!email) {
       return res.status(400).json({
         message: "Email is required"
+      });
+    }
+
+    const settings = await Settings.findOne({});
+    if(settings?.enable2FA !== true){
+      return res.status(403).json({
+        message: "Two-factor authentication is disabled"
       });
     }
 

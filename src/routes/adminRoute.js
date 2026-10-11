@@ -17,7 +17,8 @@ const {
   getPlatformEarnings,
   getPlatformWallet,
   getBanks,
-  resolveAccount
+  resolveAccount,
+  approveCampaign
 } = require("../controllers/adminController");
 
 const {
@@ -47,6 +48,7 @@ router.put("/users/:id/suspend", protect, adminOnly, toggleSuspendUser);
 router.put("/users/:id/flag", protect, adminOnly, flagUser);
 
 router.get("/campaigns", protect, adminOnly, getAllCampaigns);
+router.put("/campaigns/:id/approve", protect, adminOnly, approveCampaign);
 router.delete("/campaigns/:id", protect, adminOnly, deleteCampaignAdmin);
 router.put("/campaigns/:id/flag", protect, adminOnly, flagCampaign);
 router.put("/campaigns/:id/end", protect, adminOnly, endCampaign);
