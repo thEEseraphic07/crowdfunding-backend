@@ -131,10 +131,9 @@ const completeDonation = async ({
     console.log("Campaign ID:", campaign._id);
     console.log("Stored owner ID:", campaign.owner);
     console.log("Owner found:", !!owner);
-    
+
     if (!owner) {
       await session.abortTransaction();
-
       return {
         success: false,
         status: 404,
