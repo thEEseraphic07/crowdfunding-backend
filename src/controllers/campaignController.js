@@ -52,8 +52,8 @@ if (!selectedCategory) {
 }
 
     const autoApprove = settings?.autoApproveCampaigns === true;
-    
-    console.log("Creating campaign for user:", req.user?._id);
+
+    console.log("Creating campaign for user:",req.user &&  req.user._id);
     const campaign = await Campaign.create({
       title,
       description,
