@@ -109,8 +109,6 @@ const completeDonation = async ({
     ).session(session);
 
     if (!campaign) {
-      await session.abortTransaction();
-
       return {
         success: false,
         status: 404,
@@ -315,8 +313,6 @@ exports.initializePayment = async (req, res) => {
       );
 
     if (!campaign) {
-      await session.abortTransaction();
-
       return res.status(404).json({
         message:
         "Campaign not found"
@@ -329,7 +325,6 @@ exports.initializePayment = async (req, res) => {
       campaign.isFlagged ||
       campaign.status !== "active"
     ){
-      await session.abortTransaction();
 
       return res.status(400).json({
         message:
@@ -338,7 +333,6 @@ exports.initializePayment = async (req, res) => {
     }
 
     if(campaign.deadline && new Date(campaign.deadline) <= new Date()){
-      await session.abortTransaction();
 
       return res.status(400).json({
         message: "This campaign has ended and is no longer accepting donations."
